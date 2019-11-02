@@ -58,7 +58,7 @@ CCPR2L=10;
                         CCPR2L = dc ;
                         ms10Delay() ;
                         }*/
-						CCPR1L = herp1 ;//editing test
+						CCPR1L = herp1 ;
                         CCPR2L = herp2 ;
                         ms10Delay() ;
 						Delay10KTCYx(100);
