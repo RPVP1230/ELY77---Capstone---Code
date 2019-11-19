@@ -1,0 +1,543 @@
+
+#include <stdio.h>
+#include <timers.h>
+#include <stdlib.h>
+#include <delays.h>
+#include <p18f45k22.h>
+#include "pragmas.h"
+#include <usart.h>
+#include <pwm.h>
+#define HOMESA 	60
+#define HOMELA	22
+#define HOMEZ 	56
+#define APPROACHPOS1ZAXIS 56
+#define APPROACHPOS1SARM 57
+#define APPROACHPOS1LARM 24
+#define FINALPOS1ZAXIS 56
+#define FINALPOS1SARM 63
+#define FINALPOS1LARM 35
+
+void usDelay(unsigned int value);
+void LCD_PRINT(char input[20]);
+void button1Pressed(char val);
+void button2Pressed(char val);
+void startDisplay();
+char rowLocation=0;
+char colLocation=0;
+//in order, home,approach pos1,enter pos1,lifted pos1,above approach pos1,approach pos2,enter pos2,lifted pos2,above approach pos2,approach pos3,enter pos3,lifted pos3,above approach pos3
+char ZAxisPositions[]={76,76,76,76,76,76,80,80,80};
+char SArmPositions[] ={60,79,50,50,79,79,63,63,57};
+char LArmPositions[] ={16,16,16,35,35,16,35,30,24};
+
+char RightSideZaxisMovements[]={50,50,50,50};
+char LeftSideZaxisMovements[]={76,76,76,76};
+char MidZaxisMovements[]={65,65,65,65};
+
+char RightSideSarmMovements[]={79,50,50,79};
+char LeftSideSArmMovements[]={60,65,65,79};
+char MidSarmMovements[]={60,65,65,79};
+
+char RightSideLarmMovements[]={16,16,35,35};
+char LeftSideLarmMovements[]={30,30,35,35};
+char MidLarmMovements[]={16,16,35,35};
+
+char operationNo=0;	//0=none 1=pick 2=drop 3=move to safe 4=move to home
+char operationLocation=0;//0=none, 1=right 2=mid 3=left
+char homeSafeMove=0;//0=home/1=safe/2=moving
+
+
+//moved items
+char operation=0;
+char switchStates[3]={0,0,0};
+char opID=0;//0 is no op 1is LMRLMR 2 is LMML 3 is RMLRML
+
+char LMRLMROrder[]={0,1,4,5,6,7,1,2,11,10,9,8,2,3,12,13,14,15,3,1,7,6,5,4,1,2,8,9,10,11,2,3,15,14,13,12,3,0};
+//char LMMLOrder[]={0,1,4,5,6,7,1,2,11,10,9,8,8,9,10,11,2,1,7,6,5,4,1,0};//not needed due to only allowing the changing of right side
+char RMLRMLOrder[]={0,3,12,13,14,15,3,2,11,10,9,8,2,1,4,5,6,7,1,3,15,14,13,12,3,2,8,9,10,11,2,1,7,6,5,4,1,0};
+
+//servo/side
+char locationDigitsZ[]={0,5,10,15,5,5,5,5,10,10,10,10,15,15,15,15,99};
+char locationDigitsS[]={0,5,5,5,6,7,8,9,6,7,8,9,6,7,8,9,99};
+char locationDigitsL[]={0,10,10,10,11,12,13,14,11,12,13,14,11,12,13,14,99};
+
+struct tray {
+	char filledFlag;
+	char location;//0,1,2 left mid right
+	char destination;//used to determine activity
+	int timeLeft;
+}tray1,tray0;
+//eo moved items
+
+
+
+/*
+operation will go as follows, internal and external sources will choose a state
+state will cause prog to set .need bits,they will be entered from a loadbank of defines
+if a door is opened, need will be made to match last to keep pos'n
+state will revert after user checking and finish its last operation
+once all movements are done in order, robot will return home
+*/
+struct servo
+{
+unsigned char last;
+unsigned char need;
+}ZAxis,SArm,LArm;
+//here begins lcd stuff
+
+#define RS 	PORTEbits.RE1//register select 0=command 1=text data
+//#define RW 	PORTAbits.RA1//read/write 0=write 1=read
+#define E 	PORTEbits.RE2//enable, set to low,prep other lines,bring high,wait 1us,bring low
+#define DB4 PORTCbits.RC7
+#define DB5 PORTCbits.RC6//swap to this so db7 goes into rc7, logic is backwards for some reason
+#define DB6 PORTCbits.RC5
+#define DB7 PORTCbits.RC4
+#define NUM 0x30//nums
+#define CAP 0x41//caps
+#define LWR 0x61//lwr case
+#define ACPI  -65//cap letters add to ascii char to get digits for LCD values
+#define ALWI  -97//lwr case 
+#define N2I   -48//numbers
+#define COLMAX 20//max no of cols
+
+
+
+void LCD_PRINT(char input[20]);
+void button1Pressed(char val);
+void button2Pressed(char val);
+void startDisplay();
+
+
+
+
+void initialize(void)
+{
+//OSCCON=0b01110011;//16mhz
+	OSCCON=0b00100011;
+
+/*
+250nsTcy
+1us=4Tcy
+1ms=4,000Tcy
+1s=4,000,000Tcy
+*/
+PORTB=0;
+TRISB=0;
+ANSELB=0;
+PORTC=0x00;
+TRISC=0x00;
+ANSELC=0;
+PORTE=0x00;
+TRISE=0x00;
+ANSELE=0;
+
+
+}
+
+
+void ACTION_PULSE(void)
+{
+E=0;
+usDelay(1);
+E=1;
+usDelay(1);
+E=0;
+usDelay(100);
+}
+
+void pinSet(unsigned char value)
+{
+if(value&0x01)DB7=1;
+else DB7=0;
+if(value&0x02)DB6=1;
+else DB6=0;
+if(value&0x04)DB5=1;
+else DB5=0;
+if(value&0x08)DB4=1;
+else DB4=0;
+
+ACTION_PULSE();
+}
+
+
+void LCD_CMD(unsigned char action)
+{
+RS=0;
+pinSet(action>>4);
+pinSet(action);
+}
+
+void LCD_WRITE(unsigned char action)
+{
+RS=1;
+pinSet(action>>4);
+pinSet(action);
+}
+
+void CLEAR(void)
+{
+LCD_CMD(0x01);
+usDelay(3000);
+}
+
+void LCD_SETPOS(unsigned char row ,unsigned char col)
+{//20 col,4row
+unsigned char val0=0; //start of row 0
+unsigned char val1=64;//start of row 1
+unsigned char val2=20;//start of row 2
+unsigned char val3=84;//start of row 3
+unsigned char pos=0;
+
+pos=*(&val0+row);
+pos+=col;
+LCD_CMD(0x80|pos);
+rowLocation=row;
+colLocation=col;
+}
+
+
+
+void LCD_Init(void)
+{
+char word[]="Water Level:";
+E=0;
+RS=0;
+pinSet(0x03);
+usDelay(4500);
+pinSet(0x03);
+usDelay(4500);
+pinSet(0x03);
+usDelay(150);
+pinSet(0x02);
+
+LCD_CMD(0x28);
+LCD_CMD(0x0f);
+CLEAR();
+LCD_CMD(0x06);
+	startDisplay();
+	button1Pressed(0);
+	button2Pressed(0);
+LCD_SETPOS(3,0);
+LCD_PRINT(word);
+}
+
+void secondDelay()
+{
+int i=0;
+for(i=0;i<200;i++)
+	{
+	Delay10KTCYx(2);
+	}
+}
+
+void LCD_PRINT(char * input)
+{
+char item;
+char x=0;
+while(colLocation<COLMAX && *(input+x)!=0)
+	{
+	item=*(input+x);
+	if(item>=97)item=item+ALWI+LWR;
+	else if(item>=65)item=item+ACPI+CAP;
+	else if(item>=48)item=item+N2I+NUM;
+	LCD_WRITE(item);
+	x++;
+	colLocation++;
+	};
+}
+
+void button1Pressed(char val)
+{
+char word1[]="button 1 pressed    ";
+char word2[]="button 1 not pressed";
+LCD_SETPOS(1,0);
+if (val==1)LCD_PRINT(word1);
+else LCD_PRINT(word2);
+}
+void button2Pressed(char val)
+{
+char word1[]="button 2 pressed    ";
+char word2[]="button 2 not pressed";
+LCD_SETPOS(2,0);
+if (val==1)LCD_PRINT(word1);
+else LCD_PRINT(word2);
+}
+
+void startDisplay()
+{
+char word[]="LRJ Greenhouse";
+LCD_SETPOS(0,0);
+LCD_PRINT(word);
+}
+
+//here ends lcd stuffs
+
+void usDelay(unsigned int value)
+{
+	int i;
+	for(i=0; i<value ; i++)//each cycle is 1us
+	{
+		Delay1TCY();
+		Delay1TCY();
+		Delay1TCY();
+		Delay1TCY();
+	}
+}
+
+
+void ms10Delay()
+{
+Delay1KTCYx(100);
+Delay1KTCYx(100);
+Delay1KTCYx(100);
+Delay1KTCYx(100);
+Delay1KTCYx(100);
+Delay100TCYx(2);
+Delay10TCYx(5);
+}
+
+void _ccp3Set(unsigned char need,unsigned char last)
+{
+	unsigned char value;
+	if(last<need)value=last+1;
+	else if (last>need)value=last-1;
+	else if(last==need)value=last;
+	if(value&0b00000010)CCP3CON=CCP3CON|0b00100000;
+	else CCP3CON=CCP3CON&0b11011111;
+	if(value&0b00000001)CCP3CON=CCP3CON|0b00010000;
+	else CCP3CON=CCP3CON&0b11101111;
+    CCPR3L = (value/4) ;
+	ZAxis.last=value;
+}
+void _ccp2Set(unsigned char need,unsigned char last)
+{
+	unsigned char value;
+	if(last<need)value=last+1;
+	else if (last>need)value=last-1;
+	else if(last==need)value=last;
+	if(value&0b00000010)CCP2CON=CCP2CON|0b00100000;
+	else CCP2CON=CCP2CON&0b11011111;
+	if(value&0b00000001)CCP2CON=CCP2CON|0b00010000;
+	else CCP2CON=CCP2CON&0b11101111;
+    CCPR2L = (value/4) ;
+	LArm.last=value;
+}
+void _ccp4Set(unsigned char need,unsigned char last)
+{
+	unsigned char value;
+	if(last<need)value=last+1;
+	else if (last>need)value=last-1;
+	else if(last==need)value=last;
+	if(value&0b00000010)CCP4CON=CCP4CON|0b00100000;
+	else CCP4CON=CCP4CON&0b11011111;
+	if(value&0b00000001)CCP4CON=CCP4CON|0b00010000;
+	else CCP4CON=CCP4CON&0b11101111;
+    CCPR4L = (value/4) ;
+	SArm.last=value;
+}
+
+unsigned char _convert(unsigned char num)
+{
+char returnVal=0;
+float numCalc=num/180.0;
+numCalc=((numCalc*140)+10);
+returnVal=(int)numCalc;
+return returnVal;
+}
+
+
+
+
+
+void main()
+{
+	unsigned char holdd=0;
+    unsigned char   operation=0;
+	char buthold=0;
+	unsigned char derp=20;
+	unsigned char herp1=10;
+	unsigned char herp2=0;
+	unsigned char hold=0;
+	unsigned char hold2=0;
+	int numInt=0;
+	float numCalc=0;
+	char readSel=0;
+
+	int run=0;
+	char lastOpID=0;
+	char opNumber=0;
+	char changedFlag=0;//user emptied right side tray
+	char movingHomeStop=0;//0=home 1=moving 2=stopped
+
+	OSCCON=0b00100011;
+	E=0;
+	RS=0;
+    TRISC=0b11111111;                     // set PORTC as output
+    PORTC=0;
+	TRISD=0;
+	PORTD=0;
+	TRISE=0;
+	PORTE=0;
+	initialize();
+	LCD_Init();
+	LCD_WRITE('Z');
+	ZAxis.need=_convert(90);//convert is degrees to default resolution
+	SArm.need=_convert(90);
+	LArm.need=_convert(0);
+	ZAxis.last=0;
+	SArm.last=0;
+	LArm.last=0;
+
+	T0CON=0b10000000;//8 prescale 49911 value for .25sec
+	INTCONbits.TMR0IF=0;
+	WriteTimer0(0);
+
+
+	PORTA=0;
+	TRISA= 0b00000111;
+	ANSELA=0b00000111;
+	PORTB=0b00000000;
+	TRISB=0;
+	ANSELB=0;
+
+	ADCON0=0x01;
+	ADCON1=0x00;
+	ADCON2=0x8D;
+
+	ADCON0=ADCON0|0x02;                    
+
+	CCPTMRS0=0b00010000;
+	CCPTMRS1=0b00000001;
+
+	PR2 = 0b01001101	 ;
+	T2CON = 0b00000111 ;
+	PR4 = 0b01001101	 ;
+	T4CON = 0b00000111 ;
+	PR6 = 0b01001101	 ;
+	T6CON = 0b00000111 ;
+
+	CCPR3L = 0b00000000 ;
+	CCPR4L = 0b00000000 ;
+	CCP3CON = 0b00001100 ;
+	CCP2CON = 0b00001100 ;
+	CCP4CON = 0b00001100 ;
+	CCPR2L = 0b00000000 ;//bits 4,5 are used for bits 0,1
+	ZAxis.need=HOMEZ;
+	SArm.need=HOMESA;
+	LArm.need=HOMELA;
+	while((ZAxis.need!=ZAxis.last)||(LArm.need!=LArm.last)||(SArm.need!=SArm.last))
+	{
+		_ccp3Set(ZAxis.need,ZAxis.last);//inc is left dec is right
+		_ccp2Set(LArm.need,LArm.last);//inc is extend
+		_ccp4Set(SArm.need,SArm.last);
+	}
+	while(1){
+		if(INTCONbits.TMR0IF==1)
+		{
+			_ccp3Set(ZAxis.need,ZAxis.last);//inc is left dec is right
+			_ccp2Set(LArm.need,LArm.last);//inc is extend
+			_ccp4Set(SArm.need,SArm.last);//inc is extend
+			//all above functions restrict movement to 1 bit per call
+			WriteTimer0(63000);//2ms/movement minimum
+			INTCONbits.TMR0IF=0;
+		}
+		
+
+		if(PIR1bits.ADIF==1)
+		{
+			if(readSel==0)//AN0
+			{
+				holdd=ADRESH;
+				numCalc=(holdd/3.0)*192.0;
+				holdd=(int)numCalc;
+				hold2=ADRESL/4;
+				hold=holdd|hold2;
+				numCalc=((hold/255.0)*70)+10;
+				herp2=(int)numCalc;
+				//ZAxis.need=herp2;//x1-debug code for servo locations
+				ADCON0=0x07;
+				readSel++;
+			}
+			else if (readSel==1)//AN1//
+			{
+				holdd=ADRESH;
+				numCalc=(holdd/3.0)*192.0;
+				holdd=(int)numCalc;
+				hold2=ADRESL/4;
+				hold=holdd|hold2;
+				numCalc=((hold/255.0)*70)+10;
+				herp2=(int)numCalc;
+				//SArm.need=herp2;//x1
+				ADCON0=0x0b;
+				readSel++;
+			}
+			else if (readSel==2)//AN2//water level sensor 1
+			{
+				holdd=ADRESL;
+				numInt=0;
+				numInt=ADRESH;
+				numInt=numInt<<8;
+				numInt+=holdd;
+				numCalc=numInt;
+				numCalc=numCalc/1024.0;
+				numCalc=numCalc*50;
+			//	LArm.need=herp2;//x1
+				ADCON0=0x03;
+				readSel-=2;
+				LCD_SETPOS(3,12);
+				herp2=(int)numCalc/10;
+				LCD_WRITE(herp2+48);
+				LCD_WRITE('.');
+				herp2=(int)numCalc%10;
+				LCD_WRITE(herp2+48);
+			}
+		}
+
+		if(changedFlag==1&&movingHomeStop==0)//if the user emptied, right will always need more time than left, just rinse and swap while rinsing
+		{
+			opID=2;
+			movingHomeStop=0;
+			operation=0;
+		}
+		else if ((movingHomeStop==0&&tray0.timeLeft>tray1.timeLeft&&tray0.location==0)||(movingHomeStop==0&&tray1.timeLeft>tray0.timeLeft&&tray1.location==0))	
+		{
+			opID=1;
+			movingHomeStop=1;
+			operation=0;
+		}		//swapping left and right, using middle as a medium
+
+	
+		if (opID==0)
+		{
+			operation=0;
+		}
+		else if(opID==1)
+		{
+			if(ZAxis.need==ZAxis.last&&SArm.need==SArm.last&&LArm.need==LArm.last)
+			{
+			operation++;
+			opNumber=LMRLMROrder[operation];
+			}	
+			if(operation==37)
+			{
+				opID=0;
+				operation=0;
+				movingHomeStop==0;
+			}
+		}
+		else if (opID==2)
+		{
+			if(ZAxis.need==ZAxis.last&&SArm.need==SArm.last&&LArm.need==LArm.last)
+			{
+				operation++;
+				opNumber=RMLRMLOrder[operation];
+			}	
+			if(operation==37)
+			{
+				opID=0;
+				operation=0;
+				movingHomeStop==0;
+				changedFlag=0;
+			}
+		}
+	}
+}		
