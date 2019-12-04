@@ -601,7 +601,7 @@ void main()
 						timeChangeFlag=1;
 						pumpFlag=(pumpFlag+1)&0b00000001;
 					}
-					 if(secondCounter<10&&pumpFlag==1)
+					 if(secondCounter<10&&pumpFlag==1&&movingHomeStop==0)
 					{
 					PORTD=PORTD|0b00000100;
 					}
