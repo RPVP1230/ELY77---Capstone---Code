@@ -39,12 +39,9 @@
 /*
 water sensor 1 AN1 RA1
 water sensor 2 AN2 RA2
-
 light AN11 RB4
 shelves AN8 RB2
 doors AN4 RA5
-
-
 */
 
 void usDelay(unsigned int value);
@@ -98,7 +95,6 @@ unsigned char need;
 //here begins lcd stuff
 
 #define RS 	PORTEbits.RE1//register select 0=command 1=text data
-//#define RW 	PORTAbits.RA1//read/write 0=write 1=read
 #define E 	PORTEbits.RE2//enable, set to low,prep other lines,bring high,wait 1us,bring low
 #define DB4 PORTCbits.RC7
 #define DB5 PORTCbits.RC6//swap to this so db7 goes into rc7, logic is backwards for some reason
@@ -570,7 +566,7 @@ void main()
 	CCP2CON = 0b00001100 ;
 	CCP4CON = 0b00001100 ;
 	CCPR2L = 0b00000000 ;//bits 4,5 are used for bits 0,1
-	while(1){
+	while(0){
 
 		ZAxis.need=locationDigitsZ[opNumber];
 		SArm.need=locationDigitsS[opNumber];
